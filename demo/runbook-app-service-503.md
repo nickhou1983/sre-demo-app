@@ -20,6 +20,8 @@ When investigating HTTP 503 errors on the Contoso Order Service Web App, execute
 ### Step 1: Check Application Insights Exceptions & Traces
 Query the linked Application Insights / Log Analytics workspace (`AppExceptions` / `AppTraces` or `exceptions` / `traces` tables) over the last 30 minutes:
 - Look for `ConnectionPoolExhaustedError` or `ReleaseRegressionError` in `app/services/checkout.py`.
+- Search traces for messages beginning with `CHAOS CONTROL:` and requests where the operation name is `POST /api/chaos/mode`.
+- A successful chaos-control request can set an in-memory override without changing ARM App Settings or producing a `Microsoft.Web/sites/config/write` Activity Log event. Treat the trace message as the active runtime state when it conflicts with ARM values.
 
 ### Step 2: Inspect Azure Activity Log & App Service Configuration
 Check recent changes to App Service Application Settings (`Microsoft.Web/sites/config/write`):
@@ -112,8 +114,9 @@ az webapp restart \
   --resource-group "$RESOURCE_GROUP" \
   --name "$WEBAPP_NAME"
 ```
+A restart normally reloads App Settings, but an in-memory chaos override may remain active on a reused worker. Do not repeat restart attempts.
 
-4. If the worker still serves stale configuration, perform a controlled stop/start and verify the state after each operation:
+4. If one restart does not clear the stale runtime state, perform a controlled stop/start to allocate a fresh worker process. Verify the state after each operation:
 ```bash
 az webapp stop \
   --subscription "$SUBSCRIPTION_ID" \
@@ -139,4 +142,11 @@ az webapp show \
 ```
 Repeat step 2 after the app returns to `Running`.
 
-5. If direct HTTP checks are blocked by network access restrictions, query Application Insights over a post-change window. Confirm fresh `GET /health` and `GET /api/orders` request telemetry has `resultCode == 200`, and confirm no new `ConnectionPoolExhaustedError` or `ReleaseRegressionError` exceptions occurred.
+5. If direct HTTP checks are blocked by network access restrictions:
+   1. Attempt one request to both `/health` and `/api/orders` so the verification calls are represented in telemetry.
+   2. Wait 30 seconds for Application Insights ingestion.
+   3. Query a post-change window that begins before the verification calls.
+   4. Confirm at least one fresh `GET /health` request and one fresh `GET /api/orders` request have `resultCode == 200`.
+   5. Confirm the same post-recovery interval contains no new `ConnectionPoolExhaustedError` or `ReleaseRegressionError` exceptions.
+
+Do not treat an empty telemetry result as proof of recovery. First confirm the query window contains the generated verification requests.

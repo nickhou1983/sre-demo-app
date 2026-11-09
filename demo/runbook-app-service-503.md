@@ -32,12 +32,30 @@ Check recent changes to App Service Application Settings (`Microsoft.Web/sites/c
 
 ## 3. Approved Remediation Actions
 
+Set these variables before running remediation commands:
+```bash
+SUBSCRIPTION_ID="<SUBSCRIPTION_ID>"
+RESOURCE_GROUP="<RESOURCE_GROUP>"
+WEBAPP_NAME="<WEBAPP_NAME>"
+```
+
+Capture the current relevant settings before making changes:
+```bash
+az webapp config appsettings list \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
+  --query "[?name=='FAULT_MODE' || name=='DB_MAX_CONNECTIONS' || name=='PAYMENT_GATEWAY_URL' || name=='APP_VERSION'].{name:name,value:value}" \
+  --output table
+```
+
 ### Case A: Configuration Drift (`ConnectionPoolExhaustedError` / `bad_config`)
 Restore the approved production App Settings using Azure CLI:
 ```bash
 az webapp config appsettings set \
-  --resource-group <RESOURCE_GROUP> \
-  --name <WEBAPP_NAME> \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
   --settings \
     FAULT_MODE="none" \
     DB_MAX_CONNECTIONS="50" \
@@ -48,8 +66,9 @@ az webapp config appsettings set \
 1. Roll back the application version setting immediately:
 ```bash
 az webapp config appsettings set \
-  --resource-group <RESOURCE_GROUP> \
-  --name <WEBAPP_NAME> \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
   --settings \
     APP_VERSION="1.1.0-stable" \
     FAULT_MODE="none"
@@ -59,4 +78,65 @@ az webapp config appsettings set \
 ---
 
 ## 4. Post-Mitigation Verification
-Verify recovery by calling `GET https://<defaultHostName>/health` and `GET https://<defaultHostName>/api/orders` and confirming both return `HTTP 200 OK` with `"status": "healthy"`.
+
+1. Read back the four relevant settings and confirm they match the approved values:
+```bash
+az webapp config appsettings list \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
+  --query "[?name=='FAULT_MODE' || name=='DB_MAX_CONNECTIONS' || name=='PAYMENT_GATEWAY_URL' || name=='APP_VERSION'].{name:name,value:value}" \
+  --output table
+```
+
+2. Wait 15 seconds for App Service configuration propagation, then call both endpoints:
+```bash
+DEFAULT_HOST_NAME=$(az webapp show \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
+  --query defaultHostName \
+  --output tsv)
+
+curl --fail --show-error --silent --write-out '\n/health HTTP %{http_code}\n' \
+  "https://$DEFAULT_HOST_NAME/health"
+curl --fail --show-error --silent --write-out '\n/api/orders HTTP %{http_code}\n' \
+  "https://$DEFAULT_HOST_NAME/api/orders"
+```
+Both endpoints must return `HTTP 200`. The `/health` response body must include `"status": "healthy"`.
+
+3. If either endpoint still returns `503`, restart the Web App once and repeat step 2:
+```bash
+az webapp restart \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME"
+```
+
+4. If the worker still serves stale configuration, perform a controlled stop/start and verify the state after each operation:
+```bash
+az webapp stop \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME"
+az webapp show \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
+  --query state \
+  --output tsv
+
+az webapp start \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME"
+az webapp show \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WEBAPP_NAME" \
+  --query state \
+  --output tsv
+```
+Repeat step 2 after the app returns to `Running`.
+
+5. If direct HTTP checks are blocked by network access restrictions, query Application Insights over a post-change window. Confirm fresh `GET /health` and `GET /api/orders` request telemetry has `resultCode == 200`, and confirm no new `ConnectionPoolExhaustedError` or `ReleaseRegressionError` exceptions occurred.

@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Contoso Order Service — Azure SRE Agent 演示控制台</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --blue: #3b82f6;
+      --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-display: "Space Grotesk", "SF Pro Display", "Segoe UI", sans-serif;
+      --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px;
+      line-height: 1.5;
+    }
+    .container { max-width: 1180px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .title-group h1 { font-family: var(--font-display); font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em; }
+    .title-group p { color: var(--muted); font-size: 0.9rem; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 9999px;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    .badge.healthy { background: rgba(34, 197, 94, 0.15); color: var(--green); border: 1px solid var(--green); }
+    .badge.unhealthy { background: rgba(239, 68, 68, 0.2); color: var(--red); border: 1px solid var(--red); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .card h3 { font-family: var(--font-display); font-size: 0.82rem; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; letter-spacing: 0.04em; }
+    .metric-val { font-family: var(--font-display); font-size: 1.85rem; font-weight: 700; }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+    .btn-group { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--text);
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.88rem;
+      transition: all 0.15s;
+    }
+    button:hover { border-color: var(--blue); }
+    button.btn-danger { background: rgba(239, 68, 68, 0.18); border-color: var(--red); color: #fca5a5; }
+    button.btn-warn { background: rgba(245, 158, 11, 0.18); border-color: var(--amber); color: #fde68a; }
+    button.btn-success { background: rgba(34, 197, 94, 0.18); border-color: var(--green); color: #86efac; }
+    button.btn-primary { background: var(--blue); border-color: var(--blue); color: white; }
+    .kv-list { margin-top: 10px; font-size: 0.9rem; }
+    .kv-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px dashed var(--border);
+      gap: 12px;
+    }
+    .kv-row code, code { font-family: var(--font-mono); color: #93c5fd; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; }
+    .status-200 { color: var(--green); font-weight: 700; }
+    .status-503 { color: var(--red); font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-group">
+        <h1>Contoso Order & Checkout Service</h1>
+        <p>Azure SRE Agent 场景 1 演示：不良发布 / 错误配置引发 HTTP 503 故障与自动排障</p>
+      </div>
+      <div id="healthBadge" class="badge healthy">● 正在检测状态...</div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h3>总请求数 (Total)</h3>
+        <div class="metric-val" id="mTotal">0</div>
+      </div>
+      <div class="card">
+        <h3>成功响应 (HTTP 200)</h3>
+        <div class="metric-val" style="color: var(--green)" id="m2xx">0</div>
+      </div>
+      <div class="card">
+        <h3>服务异常 (HTTP 503)</h3>
+        <div class="metric-val" style="color: var(--red)" id="m5xx">0</div>
+      </div>
+      <div class="card">
+        <h3>5xx 错误率 / 最近延迟</h3>
+        <div class="metric-val"><span id="mRate">0%</span> <small style="font-size:0.95rem;color:var(--muted)" id="mLat">(0 ms)</small></div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <h3>1. 故障注入与恢复控制台 (Chaos & Fault Injection)</h3>
+        <p style="font-size:0.86rem;color:var(--muted);margin-top:4px;">
+          可在此一键模拟不良版本发布或配置变更错误，也可通过 Azure CLI 修改 App Settings 触发 Azure Activity Log + 503 告警。
+        </p>
+        <div class="btn-group">
+          <button class="btn-danger" onclick="setMode('bad_config')">🔥 注入配置错误 (DB_MAX_CONNECTIONS=0 → 503)</button>
+          <button class="btn-danger" onclick="setMode('bad_release')">💥 模拟不良发版 (v1.2.0-buggy → 503)</button>
+          <button class="btn-warn" onclick="setMode('high_latency')">🐢 注入慢响应 (2.2s 延迟)</button>
+          <button class="btn-success" onclick="setMode('none')">✅ 恢复正常 (v1.1.0-stable)</button>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:16px 0;" />
+        <h3>2. 流量与告警触发器 (Traffic Generator)</h3>
+        <div class="btn-group">
+          <button class="btn-primary" onclick="sendSingleCheckout()">🛒 发起单笔下单 (/api/checkout)</button>
+          <button class="btn-primary" onclick="sendBurst(20)">⚡ 连续发送 20 次请求 (快速触发 5xx 告警)</button>
+          <button onclick="toggleAutoTraffic()" id="autoTrafficBtn">▶️ 开启持续流量 (每 2 秒)</button>
+          <button onclick="resetMetrics()">🧹 清空统计</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>当前运行配置与环境状态 (Runtime & App Settings)</h3>
+        <div class="kv-list">
+          <div class="kv-row"><span>APP_VERSION (当前部署版本)</span><code id="cfgVersion">-</code></div>
+          <div class="kv-row"><span>FAULT_MODE (故障模式)</span><code id="cfgMode">-</code></div>
+          <div class="kv-row"><span>DB_MAX_CONNECTIONS (连接池上限)</span><code id="cfgDb">-</code></div>
+          <div class="kv-row"><span>PAYMENT_GATEWAY_URL</span><code id="cfgUrl">-</code></div>
+          <div class="kv-row"><span>Application Insights 遥测状态</span><code id="cfgAi">-</code></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>实时请求与异常遥测日志 (Recent Telemetry & Stack Trace Context)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>接口</th>
+            <th>状态码</th>
+            <th>版本</th>
+            <th>耗时</th>
+            <th>日志详情 / 异常信息 (同步上报至 Application Insights)</th>
+          </tr>
+        </thead>
+        <tbody id="eventTable">
+          <tr><td colspan="6" style="color:var(--muted)">暂无请求记录</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let autoTimer = null;
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const badge = document.getElementById('healthBadge');
+        if (data.service_healthy) {
+          badge.className = 'badge healthy';
+          badge.textContent = '● 服务正常 (HTTP 200 OK)';
+        } else {
+          badge.className = 'badge unhealthy';
+          badge.textContent = '▲ 服务故障 (HTTP 503 Service Unavailable)';
+        }
+        document.getElementById('mTotal').textContent = data.metrics.total_requests;
+        document.getElementById('m2xx').textContent = data.metrics.http_2xx;
+        document.getElementById('m5xx').textContent = data.metrics.http_5xx;
+        document.getElementById('mRate').textContent = data.metrics.error_rate_pct + '%';
+        document.getElementById('mLat').textContent = '(' + data.metrics.last_latency_ms + ' ms)';
+
+        document.getElementById('cfgVersion').textContent = data.config.app_version;
+        document.getElementById('cfgMode').textContent = data.config.fault_mode;
+        document.getElementById('cfgDb').textContent = data.config.db_max_connections;
+        document.getElementById('cfgUrl').textContent = data.config.payment_gateway_url;
+        document.getElementById('cfgAi').textContent = data.config.appinsights_configured ? 'Enabled (Connected)' : 'Local stdout mode';
+
+        const tbody = document.getElementById('eventTable');
+        if (!data.recent_events || data.recent_events.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">暂无请求记录</td></tr>';
+        } else {
+          tbody.innerHTML = data.recent_events.slice(0, 15).map(ev => `
+            <tr>
+              <td style="white-space:nowrap">${ev.timestamp}</td>
+              <td><code>${ev.endpoint}</code></td>
+              <td class="${ev.status_code === 200 ? 'status-200' : 'status-503'}">HTTP ${ev.status_code}</td>
+              <td><code>${ev.version}</code></td>
+              <td>${ev.latency_ms} ms</td>
+              <td style="font-family:monospace;font-size:0.8rem;">${ev.message}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function setMode(mode) {
+      await fetch('/api/chaos/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+      });
+      await sendSingleCheckout();
+      await refreshStatus();
+    }
+
+    async function sendSingleCheckout() {
+      await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item: 'Azure SRE GPU Cluster', amount: 499.0, quantity: 1 })
+      });
+      await refreshStatus();
+    }
+
+    async function sendBurst(count) {
+      const promises = [];
+      for (let i = 0; i < count; i++) {
+        promises.push(fetch('/api/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item: 'Burst Order #' + (i + 1), amount: 99.0, quantity: 1 })
+        }));
+      }
+      await Promise.all(promises);
+      await refreshStatus();
+    }
+
+    function toggleAutoTraffic() {
+      const btn = document.getElementById('autoTrafficBtn');
+      if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+        btn.textContent = '▶️ 开启持续流量 (每 2 秒)';
+      } else {
+        autoTimer = setInterval(sendSingleCheckout, 2000);
+        btn.textContent = '⏸️ 停止持续流量';
+      }
+    }
+
+    async function resetMetrics() {
+      await fetch('/api/chaos/reset-metrics', { method: 'POST' });
+      await refreshStatus();
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 2500);
+  </script>
+</body>
+</html>
